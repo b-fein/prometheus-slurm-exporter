@@ -294,7 +294,15 @@ func (n *NodeData) SetTotalCPUs(totalCPUs *int32) error {
 	return nil
 }
 
-func (n *NodeData) SetNodeGPUTotal(tresString *string) error {
+func (n *NodeData) SetNodeGPUTotal(tresString *string, gresString *string) error {
+	if len(*gresString) > 0 {
+		return n.setNodeGPUTotalFromGres(gresString)
+	}
+
+	return n.setNodeGPUTotalFromTres(tresString)
+}
+
+func (n *NodeData) setNodeGPUTotalFromTres(tresString *string) error {
 	parts := strings.Split(*tresString, ",")
 	for _, p := range parts {
 		if strings.Contains(p, "gres/gpu=") {
@@ -315,7 +323,24 @@ func (n *NodeData) SetNodeGPUTotal(tresString *string) error {
 	return nil
 }
 
-func (n *NodeData) SetNodeGPUAllocated(tresString *string) error {
+func (n *NodeData) setNodeGPUTotalFromGres(gresString *string) error {
+	nGpus, err := extractGPUCountGres(gresString)
+	if err != nil {
+		return err
+	}
+	n.GPUTotal = nGpus
+	return nil
+}
+
+func (n *NodeData) SetNodeGPUAllocated(tresString *string, gresString *string) error {
+	if len(*gresString) > 0 {
+		return n.setNodeGPUAllocatedFromGres(gresString)
+	}
+
+	return n.setNodeGPUAllocatedFromTres(tresString)
+}
+
+func (n *NodeData) setNodeGPUAllocatedFromTres(tresString *string) error {
 	parts := strings.Split(*tresString, ",")
 	for _, p := range parts {
 		if strings.Contains(p, "gres/gpu=") {
@@ -334,6 +359,40 @@ func (n *NodeData) SetNodeGPUAllocated(tresString *string) error {
 	}
 	n.GPUAllocated = 0
 	return nil
+}
+
+func (n *NodeData) setNodeGPUAllocatedFromGres(gresString *string) error {
+	nGpus, err := extractGPUCountGres(gresString)
+	if err != nil {
+		return err
+	}
+	n.GPUAllocated = nGpus
+	return nil
+}
+
+func extractGPUCountGres(gresString *string) (int32, error) {
+	parentheses := regexp.MustCompile("\\(.*\\)")
+	// e.g. gpu:a100:1(S:0) -> gpu:a100:1
+	gresStripped := parentheses.ReplaceAllString(*gresString, "")
+	parts := strings.Split(gresStripped, ":")
+
+	var gpuCountPart string
+	if len(parts) == 2 {
+		// gpu:COUNT
+		gpuCountPart = parts[1]
+	} else if len(parts) == 3 {
+		// gpu:gpu_type:COUNT
+		gpuCountPart = parts[2]
+	} else {
+		return 0, fmt.Errorf("cannot extract GPU count from gres: %s", *gresString)
+	}
+
+	nGpus, err := strconv.Atoi(gpuCountPart)
+	if err != nil {
+		return 0, fmt.Errorf("found GPU count in gres but failed to parse: %s", gpuCountPart)
+	}
+
+	return int32(nGpus), nil
 }
 
 func (n *NodeData) SetNodeStates(states []string) error {
@@ -464,10 +523,10 @@ func (d *NodesData) FromResponse(r NodesResp) error {
 			return err
 		}
 
-		if err = nd.SetNodeGPUAllocated(n.TresUsed); err != nil {
+		if err = nd.SetNodeGPUAllocated(n.TresUsed, n.GresUsed); err != nil {
 			return err
 		}
-		if err = nd.SetNodeGPUTotal(n.Tres); err != nil {
+		if err = nd.SetNodeGPUTotal(n.Tres, n.Gres); err != nil {
 			return err
 		}
 

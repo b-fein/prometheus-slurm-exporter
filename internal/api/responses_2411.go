@@ -41,6 +41,8 @@ type NodesResp struct {
 		State         []string `json:"state,omitempty"`
 		Tres          *string  `json:"tres,omitempty"`
 		TresUsed      *string  `json:"tres_used,omitempty"`
+		Gres          *string  `json:"gres,omitempty"`
+		GresUsed      *string  `json:"gres_used,omitempty"`
 		Partitions    []string `json:"partitions,omitempty"`
 		AllocMemory   *int64   `json:"alloc_memory,omitempty"`
 		RealMemory    *int64   `json:"real_memory,omitempty"`
@@ -65,9 +67,9 @@ type PartitionsResp struct {
 type SharesResp struct {
 	Shares struct {
 		Shares []struct {
-			Name           *string  `json:"name"`
+			Name           *string `json:"name"`
 			EffectiveUsage *struct {
-				Number   *float64 `json:"number"`
+				Number *float64 `json:"number"`
 			} `json:"effective_usage"`
 		} `json:"shares"`
 	} `json:"shares"`
