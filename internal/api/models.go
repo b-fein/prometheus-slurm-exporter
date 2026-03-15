@@ -202,6 +202,7 @@ type NodeData struct {
 	Cpus          int32
 	GPUTotal      int32
 	GPUAllocated  int32
+	GpuType       string
 }
 
 func NewNodesData() *NodesData {
@@ -395,6 +396,19 @@ func extractGPUCountGres(gresString *string) (int32, error) {
 	return int32(nGpus), nil
 }
 
+func (n *NodeData) SetNodeGPUType(gresString *string) {
+	parentheses := regexp.MustCompile("\\(.*\\)")
+	// e.g. gpu:a100:1(S:0) -> gpu:a100:1
+	gresStripped := parentheses.ReplaceAllString(*gresString, "")
+	parts := strings.Split(gresStripped, ":")
+
+	if len(parts) < 3 {
+		n.GpuType = "unknown"
+	} else {
+		n.GpuType = parts[1]
+	}
+}
+
 func (n *NodeData) SetNodeStates(states []string) error {
 	var nodeStates []types.NodeState
 	if states == nil {
@@ -528,6 +542,9 @@ func (d *NodesData) FromResponse(r NodesResp) error {
 		}
 		if err = nd.SetNodeGPUTotal(n.Tres, n.Gres); err != nil {
 			return err
+		}
+		if nd.GPUTotal > 0 {
+			nd.SetNodeGPUType(n.Gres)
 		}
 
 		d.Nodes = append(d.Nodes, nd)
