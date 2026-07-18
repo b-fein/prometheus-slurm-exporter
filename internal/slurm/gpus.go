@@ -20,13 +20,14 @@ type GPUsCollector struct {
 }
 
 func NewGPUsCollector(ctx context.Context) *GPUsCollector {
+	labels := []string{"gpu_type"}
 	return &GPUsCollector{
 		ctx:         ctx,
-		alloc:       prometheus.NewDesc("slurm_gpus_alloc", "Allocated GPUs", nil, nil),
-		idle:        prometheus.NewDesc("slurm_gpus_idle", "Idle GPUs", nil, nil),
-		other:       prometheus.NewDesc("slurm_gpus_other", "Other GPUs", nil, nil),
-		total:       prometheus.NewDesc("slurm_gpus_total", "Total GPUs", nil, nil),
-		utilization: prometheus.NewDesc("slurm_gpus_utilization", "Total GPU utilization", nil, nil),
+		alloc:       prometheus.NewDesc("slurm_gpus_alloc", "Allocated GPUs", labels, nil),
+		idle:        prometheus.NewDesc("slurm_gpus_idle", "Idle GPUs", labels, nil),
+		other:       prometheus.NewDesc("slurm_gpus_other", "Other GPUs", labels, nil),
+		total:       prometheus.NewDesc("slurm_gpus_total", "Total GPUs", labels, nil),
+		utilization: prometheus.NewDesc("slurm_gpus_utilization", "Total GPU utilization", labels, nil),
 	}
 }
 
@@ -49,16 +50,19 @@ func (cc *GPUsCollector) Collect(ch chan<- prometheus.Metric) {
 		slog.Error("failed to process nodes response for gpu metrics", "error", err)
 		return
 	}
-	gm, err := ParseGPUsMetrics(nodesData)
+	gmPerGpuType, err := ParseGPUsMetrics(nodesData)
 	if err != nil {
 		slog.Error("failed to collect gpus metrics", "error", err)
 		return
 	}
-	ch <- prometheus.MustNewConstMetric(cc.alloc, prometheus.GaugeValue, gm.alloc)
-	ch <- prometheus.MustNewConstMetric(cc.idle, prometheus.GaugeValue, gm.idle)
-	ch <- prometheus.MustNewConstMetric(cc.other, prometheus.GaugeValue, gm.other)
-	ch <- prometheus.MustNewConstMetric(cc.total, prometheus.GaugeValue, gm.total)
-	ch <- prometheus.MustNewConstMetric(cc.utilization, prometheus.GaugeValue, gm.utilization)
+
+	for gpuType, metrics := range gmPerGpuType {
+		ch <- prometheus.MustNewConstMetric(cc.alloc, prometheus.GaugeValue, metrics.alloc, gpuType)
+		ch <- prometheus.MustNewConstMetric(cc.idle, prometheus.GaugeValue, metrics.idle, gpuType)
+		ch <- prometheus.MustNewConstMetric(cc.other, prometheus.GaugeValue, metrics.other, gpuType)
+		ch <- prometheus.MustNewConstMetric(cc.total, prometheus.GaugeValue, metrics.total, gpuType)
+		ch <- prometheus.MustNewConstMetric(cc.utilization, prometheus.GaugeValue, metrics.utilization, gpuType)
+	}
 }
 
 type gpusMetrics struct {
@@ -89,21 +93,25 @@ func NewGPUsMetrics() *gpusMetrics {
 
 // ParseGPUsMetrics iterates through node response objects and tallies up the total and
 // allocated gpus, then derives idle and utilization from those numbers.
-func ParseGPUsMetrics(nodesData *api.NodesData) (*gpusMetrics, error) {
-	gm := NewGPUsMetrics()
+func ParseGPUsMetrics(nodesData *api.NodesData) (map[string]*gpusMetrics, error) {
+	gmPerType := make(map[string]*gpusMetrics)
+
 	for _, n := range nodesData.Nodes {
+		if n.GPUTotal == 0 {
+			continue
+		}
+
 		idleGPUs := n.GPUTotal - n.GPUAllocated
-		gm.total += float64(n.GPUTotal)
-		gm.alloc += float64(n.GPUAllocated)
-		gm.idle += float64(idleGPUs)
+
+		metricsNodeType, ok := gmPerType[n.GpuType]
+		if !ok {
+			metricsNodeType = NewGPUsMetrics()
+			gmPerType[n.GpuType] = metricsNodeType
+		}
+		metricsNodeType.total += float64(n.GPUTotal)
+		metricsNodeType.alloc += float64(n.GPUAllocated)
+		metricsNodeType.idle += float64(idleGPUs)
 	}
-	// TODO: Do we really need an "other" field?
-	// using TRES, it should be straightforward.
-	if gm.total > 0 {
-		// if total is 0, we get NaN, so we check here
-		gm.other = gm.total - (gm.alloc + gm.idle)
-	} else {
-		gm.other = 0
-	}
-	return gm, nil
+
+	return gmPerType, nil
 }
