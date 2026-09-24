@@ -97,20 +97,24 @@ func ParseGPUsMetrics(nodesData *api.NodesData) (map[string]*gpusMetrics, error)
 	gmPerType := make(map[string]*gpusMetrics)
 
 	for _, n := range nodesData.Nodes {
-		if n.GPUTotal == 0 {
+		if len(n.GPUTotal) == 0 {
 			continue
 		}
 
-		idleGPUs := n.GPUTotal - n.GPUAllocated
+		for _, gpuType := range n.GpuType {
+			total := n.GPUTotal[gpuType]
+			alloc := n.GPUAllocated[gpuType]
+			idleGPUs := total - alloc
 
-		metricsNodeType, ok := gmPerType[n.GpuType]
-		if !ok {
-			metricsNodeType = NewGPUsMetrics()
-			gmPerType[n.GpuType] = metricsNodeType
+			metricsNodeType, ok := gmPerType[gpuType]
+			if !ok {
+				metricsNodeType = NewGPUsMetrics()
+				gmPerType[gpuType] = metricsNodeType
+			}
+			metricsNodeType.total += float64(total)
+			metricsNodeType.alloc += float64(alloc)
+			metricsNodeType.idle += float64(idleGPUs)
 		}
-		metricsNodeType.total += float64(n.GPUTotal)
-		metricsNodeType.alloc += float64(n.GPUAllocated)
-		metricsNodeType.idle += float64(idleGPUs)
 	}
 
 	return gmPerType, nil
