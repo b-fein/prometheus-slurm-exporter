@@ -200,8 +200,9 @@ type NodeData struct {
 	AllocIdleCpus int32
 	OtherCpus     int32
 	Cpus          int32
-	GPUTotal      int32
-	GPUAllocated  int32
+	GPUTotal      map[string]int32
+	GPUAllocated  map[string]int32
+	GpuType       []string
 }
 
 func NewNodesData() *NodesData {
@@ -294,46 +295,147 @@ func (n *NodeData) SetTotalCPUs(totalCPUs *int32) error {
 	return nil
 }
 
-func (n *NodeData) SetNodeGPUTotal(tresString *string) error {
-	parts := strings.Split(*tresString, ",")
-	for _, p := range parts {
-		if strings.Contains(p, "gres/gpu=") {
-			gp := strings.Split(p, "=")
-			if len(gp) != 2 {
-				return fmt.Errorf("found gpu in tres but failed to parse: %s", p)
-			}
-			ns := gp[1]
-			ng, err := strconv.Atoi(ns)
-			if err != nil {
-				return fmt.Errorf("failed to parse number of gpus from tres: %s", p)
-			}
-			n.GPUTotal = int32(ng)
-			return nil
-		}
+func (n *NodeData) SetNodeGPUTotal(tresString *string, gresString *string) error {
+	if len(*gresString) > 0 {
+		return n.setNodeGPUTotalFromGres(gresString)
 	}
-	n.GPUTotal = 0
+
+	return n.setNodeGPUTotalFromTres(tresString)
+}
+
+func (n *NodeData) setNodeGPUTotalFromTres(tresString *string) error {
+	gpus, err := parseGpusFromTres(tresString)
+	if err != nil {
+		return err
+	}
+	n.GPUTotal = gpus
+	return nil
+
+}
+
+func (n *NodeData) setNodeGPUTotalFromGres(gresString *string) error {
+	nGpus, err := extractGPUCountGres(gresString)
+	if err != nil {
+		return err
+	}
+	n.GPUTotal = nGpus
 	return nil
 }
 
-func (n *NodeData) SetNodeGPUAllocated(tresString *string) error {
+func (n *NodeData) SetNodeGPUAllocated(tresString *string, gresString *string) error {
+	if len(*gresString) > 0 {
+		return n.setNodeGPUAllocatedFromGres(gresString)
+	}
+
+	return n.setNodeGPUAllocatedFromTres(tresString)
+}
+
+func (n *NodeData) setNodeGPUAllocatedFromTres(tresString *string) error {
+	gpus, err := parseGpusFromTres(tresString)
+	if err != nil {
+		return err
+	}
+	n.GPUAllocated = gpus
+	return nil
+}
+
+func parseGpusFromTres(tresString *string) (map[string]int32, error) {
+	gpus := make(map[string]int32)
+
 	parts := strings.Split(*tresString, ",")
 	for _, p := range parts {
-		if strings.Contains(p, "gres/gpu=") {
+		if strings.Contains(p, "gres/gpu") {
 			gp := strings.Split(p, "=")
 			if len(gp) != 2 {
-				return fmt.Errorf("found gpu in tres but failed to parse: %s", p)
+				return nil, fmt.Errorf("found gpu in tres but failed to parse: %s", p)
 			}
 			ns := gp[1]
 			ng, err := strconv.Atoi(ns)
 			if err != nil {
-				return fmt.Errorf("failed to parse number of gpus from tres: %s", p)
+				return nil, fmt.Errorf("failed to parse number of gpus from tres: %s", p)
 			}
-			n.GPUAllocated = int32(ng)
-			return nil
+
+			var gpuType string
+			gpuTypeParts := strings.Split(gp[0], ":")
+			if len(gpuTypeParts) == 1 {
+				gpuType = "unknown"
+			} else {
+				gpuType = gpuTypeParts[1]
+			}
+
+			gpus[gpuType] = int32(ng)
 		}
 	}
-	n.GPUAllocated = 0
+
+	if len(gpus) > 1 {
+		// we have more specific GPU types in addition to the generic total count
+		delete(gpus, "unknown")
+	}
+
+	return gpus, nil
+}
+
+func (n *NodeData) setNodeGPUAllocatedFromGres(gresString *string) error {
+	nGpus, err := extractGPUCountGres(gresString)
+	if err != nil {
+		return err
+	}
+	n.GPUAllocated = nGpus
 	return nil
+}
+
+func extractGPUCountGres(gresString *string) (map[string]int32, error) {
+	parentheses := regexp.MustCompile("\\(.*?\\)")
+	// e.g. gpu:a100:1(S:0) -> gpu:a100:1
+	gresStripped := parentheses.ReplaceAllString(*gresString, "")
+	gpuTypeParts := strings.Split(gresStripped, ",")
+	gpuCounts := make(map[string]int32)
+
+	for _, gpuTypePart := range gpuTypeParts {
+		parts := strings.Split(gpuTypePart, ":")
+		var gpuType string
+
+		var gpuCountPart string
+		if len(parts) == 2 {
+			// gpu:COUNT
+			gpuCountPart = parts[1]
+			gpuType = "unknown"
+		} else if len(parts) == 3 {
+			// gpu:gpu_type:COUNT
+			gpuCountPart = parts[2]
+			gpuType = parts[1]
+		} else {
+			return nil, fmt.Errorf("cannot extract GPU count from gres: %s", *gresString)
+		}
+
+		nGpusThisType, err := strconv.Atoi(gpuCountPart)
+		if err != nil {
+			return nil, fmt.Errorf("found GPU count in gres but failed to parse: %s", gpuCountPart)
+		}
+		gpuCounts[gpuType] = int32(nGpusThisType)
+	}
+
+	return gpuCounts, nil
+}
+
+func (n *NodeData) SetNodeGPUType(gresString *string) {
+	parentheses := regexp.MustCompile("\\(.*?\\)")
+	// e.g. gpu:a100:1(S:0) -> gpu:a100:1
+	gresStripped := parentheses.ReplaceAllString(*gresString, "")
+	gpuTypes := make([]string, 0)
+	gpuTypeParts := strings.Split(gresStripped, ",")
+
+	for _, gpuTypePart := range gpuTypeParts {
+		parts := strings.Split(gpuTypePart, ":")
+
+		if len(parts) < 3 {
+			gpuTypes = append(gpuTypes, "unknown")
+		} else {
+			gpuTypes = append(gpuTypes, parts[1])
+		}
+	}
+
+	n.GpuType = gpuTypes
 }
 
 func (n *NodeData) SetNodeStates(states []string) error {
@@ -464,11 +566,14 @@ func (d *NodesData) FromResponse(r NodesResp) error {
 			return err
 		}
 
-		if err = nd.SetNodeGPUAllocated(n.TresUsed); err != nil {
+		if err = nd.SetNodeGPUAllocated(n.TresUsed, n.GresUsed); err != nil {
 			return err
 		}
-		if err = nd.SetNodeGPUTotal(n.Tres); err != nil {
+		if err = nd.SetNodeGPUTotal(n.Tres, n.Gres); err != nil {
 			return err
+		}
+		if len(nd.GPUTotal) > 0 {
+			nd.SetNodeGPUType(n.Gres)
 		}
 
 		d.Nodes = append(d.Nodes, nd)

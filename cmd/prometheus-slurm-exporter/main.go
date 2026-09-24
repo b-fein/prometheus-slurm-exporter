@@ -20,7 +20,7 @@ import (
 
 var err error
 
-var version = "2.1.1-beta"
+var version = "2.1.1-infosun"
 
 func main() {
 	// set up logging
